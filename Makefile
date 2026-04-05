@@ -74,9 +74,18 @@ $(BUILD)/fresnel.p: $(BUILD)/fresnel.o sdk $(STUBS)
 
 fresnel: $(BUILD)/fresnel.p
 
+# PBR - Combined PBR-lite shader
+$(BUILD)/pbr.o: $(SRC)/pbr/pbr.c | $(BUILD)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/pbr.p: $(BUILD)/pbr.o sdk $(STUBS)
+	$(call build-plugin,$@,$<)
+
+pbr: $(BUILD)/pbr.p
+
 # ---- Targets ----
 
-all: sdk objswap fresnel
+all: sdk objswap fresnel pbr
 
 clean:
 	rm -f $(BUILD)/*.o $(BUILD)/*.p $(SDK_LIB)/server.a $(SDK_LIB)/serv_gcc.o

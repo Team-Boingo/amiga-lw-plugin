@@ -22,6 +22,13 @@ reflective and less transparent at glancing angles — essential for convincing
 glass, water, and polished surfaces. Configurable IOR, power, and independent
 control over reflection, diffuse and transparency effects.
 
+### PBR Shader
+
+Combined PBR-lite shader that brings modern material concepts to LightWave 5.x.
+Includes Fresnel reflection, roughness (normal perturbation), ambient occlusion
+(ray-based hemisphere sampling), and metallic mode in a single plugin. Each
+feature can be independently enabled and configured.
+
 ## Toolchain
 
 Uses `sacredbanana/amiga-compiler:m68k-amigaos` Docker image providing:
@@ -35,6 +42,7 @@ Uses `sacredbanana/amiga-compiler:m68k-amigaos` Docker image providing:
 ./build.sh          # Build SDK library + all plugins
 ./build.sh objswap  # Build ObjSwap only
 ./build.sh fresnel  # Build Fresnel only
+./build.sh pbr      # Build PBR Shader only
 ./build.sh clean    # Clean build artifacts
 ```
 
@@ -50,6 +58,8 @@ Plugin ObjReplacementHandler ObjSwap objswap.p ObjSwap
 Plugin ObjReplacementInterface ObjSwap objswap.p ObjSwap
 Plugin ShaderHandler Fresnel fresnel.p Fresnel
 Plugin ShaderInterface Fresnel fresnel.p Fresnel
+Plugin ShaderHandler PBR pbr.p PBR Shader
+Plugin ShaderInterface PBR pbr.p PBR Shader
 ```
 
 ## SDK
@@ -74,5 +84,6 @@ library, patched for GCC compatibility:
 │   └── source/           # Library source
 └── src/
     ├── objswap/          # ObjSwap plugin source
-    └── fresnel/          # Fresnel shader source
+    ├── fresnel/          # Fresnel shader source
+    └── pbr/              # PBR shader source
 ```
