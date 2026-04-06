@@ -250,15 +250,15 @@ Create(LWError *err)
 	inst->roughEnabled  = 0;
 	inst->roughAmount   = 20;
 	inst->aoEnabled     = 0;
-	inst->aoSamples     = 8;
+	inst->aoSamples     = 4;
 	inst->aoRadius      = 100;
 	inst->aoStrength    = 50;
 	inst->metallic      = 0;
 	inst->blurReflEnabled = 0;
-	inst->blurReflSamples = 8;
+	inst->blurReflSamples = 4;
 	inst->blurReflAmount  = 30;
 	inst->envEnabled    = 0;
-	inst->envSamples    = 8;
+	inst->envSamples    = 4;
 	inst->envStrength   = 50;
 	compute_f0(inst);
 
@@ -577,7 +577,7 @@ Evaluate(PBRInst *inst, ShaderAccess *sa)
 	if (inst->blurReflEnabled && inst->blurReflSamples > 0
 	    && sa->rayTrace && sa->mirror > 0.001) {
 		double viewDir[3], reflDir[3], dot_vn;
-		double spread, dist, px, py, pz;
+		double spread, px, py, pz;
 		double dir[3], col[3], pos[3];
 		double accR = 0.0, accG = 0.0, accB = 0.0;
 		int    nSamp = inst->blurReflSamples;
@@ -618,13 +618,11 @@ Evaluate(PBRInst *inst, ShaderAccess *sa)
 			vec_normalize(dir);
 
 			col[0] = col[1] = col[2] = 0.0;
-			dist = (*sa->rayTrace)(pos, dir, col);
-			if (dist > 0.0) {
-				accR += col[0];
-				accG += col[1];
-				accB += col[2];
-				validSamples++;
-			}
+			(*sa->rayTrace)(pos, dir, col);
+			accR += col[0];
+			accG += col[1];
+			accB += col[2];
+			validSamples++;
 		}
 
 		if (validSamples > 0) {
@@ -699,8 +697,8 @@ Evaluate(PBRInst *inst, ShaderAccess *sa)
  * Interface
  * ---------------------------------------------------------------- */
 
-static const char *aoSampleItems[] = { "Off", "4", "8", "16", 0 };
-static int aoSampleValues[] = { 0, 4, 8, 16 };
+static const char *aoSampleItems[] = { "Off", "2", "4", "8", 0 };
+static int aoSampleValues[] = { 0, 2, 4, 8 };
 
 XCALL_(static int)
 Interface(
