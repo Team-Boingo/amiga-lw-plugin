@@ -31,6 +31,13 @@ multi-sample rays around reflection direction), and environment sampling (indire
 lighting via hemisphere ray casting with cosine weighting) in a single plugin.
 Each feature can be independently enabled and configured.
 
+### LensFlare
+
+Post-render image filter that detects bright specular highlights and composites
+glow and hexagonal star streaks over the rendered image. Finds the 8 brightest
+specular hotspots and renders warm-tinted flares with configurable threshold,
+radius, streak length, and intensity. Applied via the Effects/Image Processing panel.
+
 ## Toolchain
 
 Uses `sacredbanana/amiga-compiler:m68k-amigaos` Docker image providing:
@@ -45,6 +52,7 @@ Uses `sacredbanana/amiga-compiler:m68k-amigaos` Docker image providing:
 ./build.sh objswap  # Build ObjSwap only
 ./build.sh fresnel  # Build Fresnel only
 ./build.sh pbr      # Build PBR Shader only
+./build.sh lensflare # Build LensFlare only
 ./build.sh clean    # Clean build artifacts
 ```
 
@@ -62,6 +70,7 @@ Plugin ShaderHandler Fresnel fresnel.p Fresnel
 Plugin ShaderInterface Fresnel fresnel.p Fresnel
 Plugin ShaderHandler PBR pbr.p PBR Shader
 Plugin ShaderInterface PBR pbr.p PBR Shader
+Plugin ImageFilterHandler LensFlare lensflare.p LensFlare
 
 ```
 
@@ -88,5 +97,6 @@ library, patched for GCC compatibility:
 └── src/
     ├── objswap/          # ObjSwap plugin source
     ├── fresnel/          # Fresnel shader source
-    └── pbr/              # PBR shader source
+    ├── pbr/              # PBR shader source
+    └── lensflare/        # Lens flare image filter source
 ```

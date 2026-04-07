@@ -84,9 +84,18 @@ $(BUILD)/pbr.p: $(BUILD)/pbr.o sdk $(STUBS)
 
 pbr: $(BUILD)/pbr.p
 
+# LensFlare - Specular lens flare image filter
+$(BUILD)/lensflare.o: $(SRC)/lensflare/lensflare.c | $(BUILD)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/lensflare.p: $(BUILD)/lensflare.o sdk $(STUBS)
+	$(call build-plugin,$@,$<)
+
+lensflare: $(BUILD)/lensflare.p
+
 # ---- Targets ----
 
-all: sdk objswap fresnel pbr
+all: sdk objswap fresnel pbr lensflare
 
 clean:
 	rm -f $(BUILD)/*.o $(BUILD)/*.p $(SDK_LIB)/server.a $(SDK_LIB)/serv_gcc.o
