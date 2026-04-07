@@ -25,11 +25,11 @@ control over reflection, diffuse and transparency effects.
 ### PBR Shader
 
 Combined PBR-lite shader that brings modern material concepts to LightWave 5.x.
-Includes Fresnel reflection, roughness (normal perturbation), ambient occlusion
-(ray-based hemisphere sampling), metallic mode, blurred reflections (cone-traced
-multi-sample rays around reflection direction), and environment sampling (indirect
-lighting via hemisphere ray casting with cosine weighting) in a single plugin.
-Each feature can be independently enabled and configured.
+Includes variable metallic intensity (0-100), roughness (normal perturbation),
+ambient occlusion (ray-based hemisphere sampling), blurred reflections (cone-traced
+multi-sample rays), and environment sampling (indirect lighting via hemisphere
+ray casting with cosine weighting). For angle-dependent Fresnel effects, stack
+with the standalone Fresnel plugin.
 
 ### LensFlare
 

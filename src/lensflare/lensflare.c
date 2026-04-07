@@ -275,7 +275,6 @@ Process(LensFlareInst *inst, const FilterAccess *fa)
 
 	for (i = 0; i < numFlares; i++) {
 		double dscale = 1.0 / (1.0 + flares[i].depth * 0.1);
-		flares[i].x |= 0;
 		{
 			int sg = (int)(gradR * dscale);
 			int sl = (int)(strkLen * dscale);
@@ -302,16 +301,22 @@ Process(LensFlareInst *inst, const FilterAccess *fa)
 				int fy = flares[i].y & 0xFFFF;
 				int sGlow = (flares[i].brightness >> 16) & 0x7FFF;
 				int sStrk = (flares[i].y >> 16) & 0x7FFF;
-				double sGlow2 = flares[i].depth;
-				double bright = (double)(flares[i].brightness & 0xFF) / 255.0;
-				double dx = (double)(x - fx);
-				double dy = (double)(y - fy);
-				double r2 = dx * dx + dy * dy;
-				double maxR = (double)(sGlow * 4);
+				int idx = x - fx;
+				int idy = y - fy;
+				int ir2, imaxR;
+				double sGlow2, bright, dx, dy, r2;
 				double tR = 0.0, tG = 0.0, tB = 0.0;
 
-				if (sStrk > sGlow * 4) maxR = (double)sStrk;
-				if (r2 > maxR * maxR) continue;
+				imaxR = sGlow * 4;
+				if (sStrk > imaxR) imaxR = sStrk;
+				ir2 = idx * idx + idy * idy;
+				if (ir2 > imaxR * imaxR) continue;
+
+				sGlow2 = flares[i].depth;
+				bright = (double)(flares[i].brightness & 0xFF) / 255.0;
+				dx = (double)idx;
+				dy = (double)idy;
+				r2 = (double)ir2;
 
 				if (r2 < 9.0) {
 					double core = inten * bright;

@@ -23,6 +23,7 @@ The shader then:
 - **Increases reflection** at glancing angles (edges become mirror-like)
 - **Decreases transparency** at glancing angles (edges become opaque)
 - **Decreases diffuse** at glancing angles (energy conservation)
+- **Increases specular** at glancing angles (brighter highlights at edges)
 
 ## Installation
 
@@ -54,6 +55,7 @@ Plugin ShaderInterface Fresnel fresnel.p Fresnel
 | Affect Transparency | on/off | on | Reduce the surface's transparency at glancing angles |
 | Affect Diffuse | on/off | on | Reduce the surface's diffuse at glancing angles (energy conservation) |
 | Diffuse Power | 1 – 10 | 5 | Diffuse curve steepness. Independent from reflection power |
+| Affect Specular | on/off | off | Boost specular highlights at glancing angles |
 
 ### Common IOR Values
 

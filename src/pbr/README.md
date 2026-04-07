@@ -1,15 +1,11 @@
 # PBR Shader — Physically-Based Rendering for LightWave 3D
 
 A combined PBR-lite shader that brings modern material concepts to LightWave 5.x
-on AmigaOS. Includes Fresnel reflection, roughness, ambient occlusion, metallic
-mode, blurred reflections, and environment sampling in a single plugin.
+on AmigaOS. Includes variable metallic intensity, roughness, ambient occlusion,
+blurred reflections, and environment sampling in a single plugin. For
+angle-dependent Fresnel effects, stack with the standalone Fresnel plugin.
 
 ## Features
-
-### Fresnel Reflection
-Schlick's approximation for angle-dependent reflectivity. Edges become more
-reflective while centers remain transparent. Independent power controls for
-reflection and diffuse curves allow simulation of varied real-world materials.
 
 ### Roughness
 Perturbs surface normals based on object-space position using a deterministic
@@ -22,10 +18,11 @@ nearby geometry. Areas where rays hit nearby surfaces (corners, crevices) are
 darkened, adding depth and contact shadows. Configurable sample count (4/8/16),
 radius, and strength.
 
-### Metallic Mode
-Switches from dielectric (glass/plastic) behavior to metallic. Metals have
-high base reflectivity, near-zero diffuse, and boosted specular — their
-appearance is dominated by reflections of the environment.
+### Metallic
+Variable intensity (0-100) blending between dielectric and metallic behavior.
+Higher values increase reflectivity, reduce diffuse, and boost specular using
+an IOR-based Fresnel curve. At 100%, the surface is fully metallic with
+near-zero diffuse — appearance dominated by reflections.
 
 ### Blurred Reflections
 Replaces LightWave's single-ray mirror reflections with multi-sample cone
@@ -65,43 +62,31 @@ Plugin ShaderInterface PBR pbr.p PBR Shader
 
 | Setting | Range | Default | Description |
 |---|---|---|---|
-| Index of Refraction | 1.0 – 5.0 | 1.5 | Base reflectivity from IOR |
-| Metallic | on/off | off | Switch to metallic material behavior |
-| Affect Reflection | on/off | on | Boost mirror at glancing angles |
-| Reflection Power | 1 – 10 | 5 | Reflection curve steepness |
-| Affect Transparency | on/off | on | Reduce transparency at glancing angles |
-| Affect Diffuse | on/off | on | Reduce diffuse at glancing angles |
-| Diffuse Power | 1 – 10 | 5 | Diffuse curve steepness |
-| Enable Roughness | on/off | off | Perturb normals for rough surfaces |
+| IOR | 1.0 – 5.0 | 1.5 | Index of Refraction for metallic F0 |
+| Metallic | 0 – 100 | 0 | Metallic intensity (0=dielectric, 100=full metal) |
+| Roughness | on/off | off | Perturb normals for rough surfaces |
 | Roughness Amount | 0 – 100 | 20 | Intensity of normal perturbation |
-| Enable AO | on/off | off | Ray-based ambient occlusion |
-| AO Samples | 4/8/16 | 8 | Rays per surface point |
+| AO | Off/2/4/8 | Off | Ambient occlusion ray samples |
 | AO Radius | float | 1.0m | Maximum occlusion distance |
 | AO Strength | 0 – 100 | 50 | Occlusion darkening intensity |
-| Blurred Reflections | on/off | off | Multi-sample cone-traced reflections |
-| Blur Samples | 4/8/16 | 8 | Rays per reflection cone |
-| Blur Spread | 0 – 100 | 30 | Cone spread angle (independent of roughness) |
-| Environment Lighting | on/off | off | Hemisphere-sampled indirect light |
-| Env Samples | 4/8/16 | 8 | Rays per hemisphere sample |
+| Blur Refl | Off/2/4/8 | Off | Blurred reflection ray samples |
+| Blur Spread | 0 – 100 | 30 | Cone spread angle |
+| Env Light | Off/2/4/8 | Off | Environment sampling ray samples |
 | Env Strength | 0 – 100 | 50 | Indirect lighting intensity |
+
+For angle-dependent Fresnel effects (reflection, transparency, diffuse, specular),
+stack the **Fresnel** plugin on the same surface.
 
 ### Material Presets
 
-**Glass**: IOR 1.5, Reflection on, Transparency on, Diffuse on, Roughness off
-- Set surface transparency to 80-100%, mirror to 10-20%
-
-**Water**: IOR 1.33, same as glass but with low roughness (5-10) enabled
-
-**Polished metal**: Metallic on, IOR 2.0+, Roughness off
+**Polished metal**: Metallic 100, IOR 2.0+, Roughness off + Fresnel plugin
 - Set surface color to metal tint, high mirror
 
-**Brushed metal**: Metallic on, IOR 2.0+, Roughness on (30-50), Blurred Reflections on
-- Roughness breaks up reflections, blur softens them realistically
+**Brushed metal**: Metallic 80, IOR 2.0+, Roughness on (30-50), Blur Refl 2-4
 
-**Plastic**: IOR 1.45, Metallic off, low Roughness (10-20)
+**Plastic**: Metallic 0, low Roughness (10-20) + Fresnel plugin (IOR 1.45)
 
-**Concrete/stone**: IOR 1.5, Metallic off, high Roughness (60-80), AO on,
-Environment Lighting on (30-50) for ambient fill
+**Concrete/stone**: Metallic 0, high Roughness (60-80), AO on, Env Light on (30-50)
 
 ### Performance Notes
 

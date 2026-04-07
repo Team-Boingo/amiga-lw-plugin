@@ -383,10 +383,16 @@ Located at: `/Users/midwan/Library/CloudStorage/OneDrive-Personal/Projects/Light
 
 ## PBR Shader - Feature Reference
 
-### Save/Load field order (19 fields total)
+### Save/Load field order (20 fields total)
 ior*1000, reflPower, affectMirror, affectTrans, affectDiffuse, diffPower,
 roughEnabled, roughAmount, aoEnabled, aoSamples, aoRadius, aoStrength,
-metallic, blurReflEnabled, blurReflSamples, blurReflAmount, envEnabled, envSamples, envStrength
+metallic, affectSpecular, blurReflEnabled, blurReflSamples, blurReflAmount,
+envEnabled, envSamples, envStrength
+
+Note: Fresnel controls (affectMirror, affectTrans, affectDiffuse, reflPower,
+diffPower) preserved in save/load for backward compat but removed from PBR UI.
+Use standalone Fresnel plugin for angle-dependent effects.
+Metallic is 0-100 (old scenes with metallic=1 auto-convert to 100 on load).
 
 ### Blurred Reflections (implemented)
 - Reflection direction: R = V - 2*dot(V,N)*N where V = normalize(wPos - raySource)

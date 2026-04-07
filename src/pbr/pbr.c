@@ -141,7 +141,10 @@ typedef struct {
 	int    aoStrength;       /* 0-100 */
 
 	/* Metallic */
-	int    metallic;
+	int    metallic;         /* 0-100 intensity */
+
+	/* Specular */
+	int    affectSpecular;
 
 	/* Blurred Reflections */
 	int    blurReflEnabled;
@@ -159,6 +162,9 @@ typedef struct {
  * ---------------------------------------------------------------- */
 
 static MessageFuncs *msg;
+
+static double pow5_lut[101];
+static int pow5_ready = 0;
 
 /* ----------------------------------------------------------------
  * Precompute F0 from IOR
@@ -242,6 +248,7 @@ Create(LWError *err)
 	inst->aoRadius      = 100;
 	inst->aoStrength    = 50;
 	inst->metallic      = 0;
+	inst->affectSpecular = 0;
 	inst->blurReflEnabled = 0;
 	inst->blurReflSamples = 4;
 	inst->blurReflAmount  = 30;
@@ -249,6 +256,15 @@ Create(LWError *err)
 	inst->envSamples    = 4;
 	inst->envStrength   = 50;
 	compute_f0(inst);
+
+	if (!pow5_ready) {
+		int j;
+		for (j = 0; j <= 100; j++) {
+			double t = j / 100.0;
+			pow5_lut[j] = t * t * t * t * t;
+		}
+		pow5_ready = 1;
+	}
 
 	return inst;
 }
@@ -326,6 +342,8 @@ Load(PBRInst *inst, const LWLoadState *ls)
 	p = parse_int(p, &v); inst->aoRadius = v;
 	p = parse_int(p, &v); inst->aoStrength = v;
 	p = parse_int(p, &v); inst->metallic = v;
+	if (inst->metallic == 1) inst->metallic = 100;
+	p = parse_int(p, &v); inst->affectSpecular = v;
 	p = parse_int(p, &v); inst->blurReflEnabled = v;
 	p = parse_int(p, &v); inst->blurReflSamples = v;
 	p = parse_int(p, &v); inst->blurReflAmount = v;
@@ -357,6 +375,7 @@ Save(PBRInst *inst, const LWSaveState *ss)
 	append_int(buf, &pos, inst->aoRadius);
 	append_int(buf, &pos, inst->aoStrength);
 	append_int(buf, &pos, inst->metallic);
+	append_int(buf, &pos, inst->affectSpecular);
 	append_int(buf, &pos, inst->blurReflEnabled);
 	append_int(buf, &pos, inst->blurReflSamples);
 	append_int(buf, &pos, inst->blurReflAmount);
@@ -395,12 +414,8 @@ Flags(PBRInst *inst)
 
 	f |= LWSHF_NORMAL;
 
-	if (inst->affectMirror)  f |= LWSHF_MIRROR;
-	if (inst->affectTrans)   f |= LWSHF_TRANSP;
-	if (inst->affectDiffuse) f |= LWSHF_DIFFUSE;
-
-	if (inst->metallic)
-		f |= LWSHF_COLOR | LWSHF_DIFFUSE | LWSHF_SPECULAR;
+	if (inst->metallic > 0)
+		f |= LWSHF_MIRROR | LWSHF_DIFFUSE | LWSHF_SPECULAR;
 
 	if (inst->aoEnabled)
 		f |= LWSHF_DIFFUSE | LWSHF_LUMINOUS | LWSHF_RAYTRACE;
@@ -439,36 +454,18 @@ Evaluate(PBRInst *inst, ShaderAccess *sa)
 		vec_normalize(sa->wNorm);
 	}
 
-	/* --- Metallic: boost F0, reduce diffuse, tint specular --- */
-	if (inst->metallic) {
-		fresnel = 0.5 + 0.5 * pow_int(oneMinusCos, inst->reflPower);
+	/* --- Metallic: blend between dielectric and metallic behavior --- */
+	if (inst->metallic > 0) {
+		double met = inst->metallic / 100.0;
+		int lutIdx = (int)(oneMinusCos * 100.0);
+		if (lutIdx < 0) lutIdx = 0;
+		if (lutIdx > 100) lutIdx = 100;
+		fresnel = inst->f0 + (1.0 - inst->f0) * pow5_lut[lutIdx];
 		if (fresnel > 1.0) fresnel = 1.0;
 
-		sa->mirror = sa->mirror + (1.0 - sa->mirror) * fresnel;
-		sa->diffuse *= 0.05;
-		sa->specular = sa->specular + (1.0 - sa->specular) * fresnel;
-	} else {
-		/* --- Fresnel: Schlick's approximation --- */
-		if (inst->affectMirror || inst->affectTrans) {
-			fresnel = inst->f0 + (1.0 - inst->f0)
-			          * pow_int(oneMinusCos, inst->reflPower);
-			if (fresnel > 1.0) fresnel = 1.0;
-			if (fresnel < 0.0) fresnel = 0.0;
-
-			if (inst->affectMirror)
-				sa->mirror = sa->mirror
-				             + (1.0 - sa->mirror) * fresnel;
-			if (inst->affectTrans)
-				sa->transparency *= (1.0 - fresnel);
-		}
-
-		if (inst->affectDiffuse) {
-			double diffFresnel = inst->f0 + (1.0 - inst->f0)
-			                     * pow_int(oneMinusCos, inst->diffPower);
-			if (diffFresnel > 1.0) diffFresnel = 1.0;
-			if (diffFresnel < 0.0) diffFresnel = 0.0;
-			sa->diffuse *= (1.0 - diffFresnel);
-		}
+		sa->mirror = sa->mirror + (1.0 - sa->mirror) * fresnel * met;
+		sa->diffuse *= 1.0 - 0.95 * met;
+		sa->specular = sa->specular + (1.0 - sa->specular) * fresnel * met;
 	}
 
 	/* --- Ambient Occlusion: cast rays in hemisphere --- */
@@ -656,8 +653,8 @@ Interface(
 {
 	LWPanelFuncs *panl;
 	LWPanelID     pan;
-	LWControl    *ctlIOR, *ctlReflPow, *ctlDiffPow, *ctlMetallic;
-	LWControl    *ctlMirror, *ctlTrans, *ctlDiffuse, *ctlRoughEn, *ctlRoughAmt;
+	LWControl    *ctlIOR, *ctlMetallic;
+	LWControl    *ctlRoughEn, *ctlRoughAmt;
 	LWControl    *ctlAOSamp, *ctlAORadius, *ctlAOStr;
 	LWControl    *ctlBlurSamp, *ctlBlurAmt;
 	LWControl    *ctlEnvSamp, *ctlEnvStr;
@@ -681,12 +678,7 @@ Interface(
 		if (!pan) goto fallback;
 
 		ctlIOR      = FLOAT_CTL(panl, pan, "IOR");
-		ctlMetallic = BOOL_CTL(panl, pan, "Metallic");
-		ctlMirror   = BOOL_CTL(panl, pan, "Affect Refl");
-		ctlReflPow  = SLIDER_CTL(panl, pan, "Reflection Power", 150, 1, 10);
-		ctlTrans    = BOOL_CTL(panl, pan, "Affect Trans");
-		ctlDiffuse  = BOOL_CTL(panl, pan, "Affect Diff");
-		ctlDiffPow  = SLIDER_CTL(panl, pan, "Diffuse Power", 150, 1, 10);
+		ctlMetallic = SLIDER_CTL(panl, pan, "Metallic", 150, 0, 100);
 		ctlRoughEn  = BOOL_CTL(panl, pan, "Roughness");
 		ctlRoughAmt = INT_CTL(panl, pan, "");
 		ctlAOSamp   = POPUP_CTL(panl, pan, "AO", aoSampleItems);
@@ -699,28 +691,10 @@ Interface(
 
 		{
 			int rowH, halfX, cy, cx, shift;
-			rowH = CON_H(ctlMetallic);
+			rowH = CON_H(ctlRoughEn);
 			halfX = PAN_GETW(panl, pan) / 2;
 			shift = 0;
 
-			cy = CON_Y(ctlMetallic);
-			MOVE_CON(ctlMirror, halfX, cy);
-			shift += rowH;
-
-			cy = CON_Y(ctlReflPow); cx = CON_X(ctlReflPow);
-			MOVE_CON(ctlReflPow, cx, cy - shift);
-
-			cy = CON_Y(ctlTrans); cx = CON_X(ctlTrans);
-			MOVE_CON(ctlTrans, cx, cy - shift);
-			cy = CON_Y(ctlTrans);
-			MOVE_CON(ctlDiffuse, halfX, cy);
-			shift += rowH;
-
-			cy = CON_Y(ctlDiffPow); cx = CON_X(ctlDiffPow);
-			MOVE_CON(ctlDiffPow, cx, cy - shift);
-
-			cy = CON_Y(ctlRoughEn); cx = CON_X(ctlRoughEn);
-			MOVE_CON(ctlRoughEn, cx, cy - shift);
 			cy = CON_Y(ctlRoughEn);
 			MOVE_CON(ctlRoughAmt, halfX, cy);
 			shift += rowH;
@@ -752,10 +726,6 @@ Interface(
 		/* Set values */
 		SET_FLOAT(ctlIOR, inst->ior);
 		SET_INT(ctlMetallic, inst->metallic);
-		SET_INT(ctlMirror, inst->affectMirror);
-		SET_INT(ctlReflPow, inst->reflPower);
-		SET_INT(ctlTrans, inst->affectTrans);
-		SET_INT(ctlDiffuse, inst->affectDiffuse);
 		SET_INT(ctlRoughEn, inst->roughEnabled);
 		SET_INT(ctlRoughAmt, inst->roughAmount);
 		aoIdx = inst->aoEnabled
@@ -781,11 +751,6 @@ Interface(
 		if ((*panl->open)(pan, PANF_BLOCKING | PANF_CANCEL)) {
 			GET_FLOAT(ctlIOR, inst->ior);
 			GET_INT(ctlMetallic, inst->metallic);
-			GET_INT(ctlMirror, inst->affectMirror);
-			GET_INT(ctlReflPow, inst->reflPower);
-			GET_INT(ctlTrans, inst->affectTrans);
-			GET_INT(ctlDiffuse, inst->affectDiffuse);
-			GET_INT(ctlDiffPow, inst->diffPower);
 			GET_INT(ctlRoughEn, inst->roughEnabled);
 			GET_INT(ctlRoughAmt, inst->roughAmount);
 			GET_INT(ctlAOSamp, aoIdx);

@@ -107,7 +107,10 @@ typedef struct {
 	int    affectTrans;    /* modify transparency                 */
 	int    affectDiffuse;  /* modify diffuse (inverse Fresnel)    */
 	int    diffPower;      /* diffuse Fresnel exponent (1-10)     */
+	int    affectSpecular; /* modify specular at glancing angles  */
 	double f0;             /* precomputed F0 from IOR             */
+	double reflLut[101];   /* precomputed pow curve for refl      */
+	double diffLut[101];   /* precomputed pow curve for diffuse   */
 } FresnelInst;
 
 /* ----------------------------------------------------------------
@@ -124,10 +127,17 @@ static void
 compute_f0(FresnelInst *inst)
 {
 	double r;
+	int i;
 
 	if (inst->ior < 1.0) inst->ior = 1.0;
 	r = (inst->ior - 1.0) / (inst->ior + 1.0);
 	inst->f0 = r * r;
+
+	for (i = 0; i <= 100; i++) {
+		double t = i / 100.0;
+		inst->reflLut[i] = pow_int(t, inst->reflPower);
+		inst->diffLut[i] = pow_int(t, inst->diffPower);
+	}
 }
 
 /* ----------------------------------------------------------------
@@ -151,6 +161,7 @@ Create(LWError *err)
 	inst->affectTrans   = 1;
 	inst->affectDiffuse = 1;
 	inst->diffPower     = FRESNEL_DEFAULT_POWER;
+	inst->affectSpecular = 0;
 	compute_f0(inst);
 
 	return inst;
@@ -223,6 +234,7 @@ Load(FresnelInst *inst, const LWLoadState *ls)
 	p = parse_int(p, &v); inst->affectTrans = v;
 	p = parse_int(p, &v); inst->affectDiffuse = v;
 	p = parse_int(p, &v); inst->diffPower = v;
+	p = parse_int(p, &v); inst->affectSpecular = v;
 
 	compute_f0(inst);
 	return 0;
@@ -242,6 +254,7 @@ Save(FresnelInst *inst, const LWSaveState *ss)
 	append_int(buf, &pos, inst->affectTrans);
 	append_int(buf, &pos, inst->affectDiffuse);
 	append_int(buf, &pos, inst->diffPower);
+	append_int(buf, &pos, inst->affectSpecular);
 
 	(*ss->write)(ss->writeData, buf, pos);
 
@@ -276,9 +289,10 @@ Flags(FresnelInst *inst)
 
 	XCALL_INIT;
 
-	if (inst->affectMirror)  f |= LWSHF_MIRROR;
-	if (inst->affectTrans)   f |= LWSHF_TRANSP;
-	if (inst->affectDiffuse) f |= LWSHF_DIFFUSE;
+	if (inst->affectMirror)   f |= LWSHF_MIRROR;
+	if (inst->affectTrans)    f |= LWSHF_TRANSP;
+	if (inst->affectDiffuse)  f |= LWSHF_DIFFUSE;
+	if (inst->affectSpecular) f |= LWSHF_SPECULAR;
 
 	return f;
 }
@@ -286,43 +300,52 @@ Flags(FresnelInst *inst)
 XCALL_(static void)
 Evaluate(FresnelInst *inst, ShaderAccess *sa)
 {
-	double cosAngle, oneMinusCos, fresnel;
+	double cosAngle, oneMinusCos, fresnel = 0.0;
 
 	XCALL_INIT;
 
-	/*
-	 * sa->cosine is the cosine of the angle between the
-	 * surface normal and the incoming ray direction.
-	 */
 	cosAngle = sa->cosine;
 	if (cosAngle < 0.0) cosAngle = -cosAngle;
 	if (cosAngle > 1.0) cosAngle = 1.0;
 
 	oneMinusCos = 1.0 - cosAngle;
+	{
+		int lutIdx = (int)(oneMinusCos * 100.0);
+		if (lutIdx < 0) lutIdx = 0;
+		if (lutIdx > 100) lutIdx = 100;
 
-	/* Reflection and transparency use reflPower */
-	if (inst->affectMirror || inst->affectTrans) {
-		fresnel = inst->f0 + (1.0 - inst->f0)
-		          * pow_int(oneMinusCos, inst->reflPower);
-		if (fresnel > 1.0) fresnel = 1.0;
-		if (fresnel < 0.0) fresnel = 0.0;
+		if (inst->affectMirror || inst->affectTrans) {
+			fresnel = inst->f0 + (1.0 - inst->f0)
+			          * inst->reflLut[lutIdx];
+			if (fresnel > 1.0) fresnel = 1.0;
 
-		if (inst->affectMirror)
-			sa->mirror = sa->mirror
-			             + (1.0 - sa->mirror) * fresnel;
+			if (inst->affectMirror)
+				sa->mirror = sa->mirror
+				             + (1.0 - sa->mirror) * fresnel;
 
-		if (inst->affectTrans)
-			sa->transparency *= (1.0 - fresnel);
-	}
+			if (inst->affectTrans)
+				sa->transparency *= (1.0 - fresnel);
+		}
 
-	/* Diffuse uses its own power (inverse: reduce at glancing angles) */
-	if (inst->affectDiffuse) {
-		double diffFresnel = inst->f0 + (1.0 - inst->f0)
-		                     * pow_int(oneMinusCos, inst->diffPower);
-		if (diffFresnel > 1.0) diffFresnel = 1.0;
-		if (diffFresnel < 0.0) diffFresnel = 0.0;
+		if (inst->affectDiffuse) {
+			double diffFresnel = inst->f0 + (1.0 - inst->f0)
+			                     * inst->diffLut[lutIdx];
+			if (diffFresnel > 1.0) diffFresnel = 1.0;
+			sa->diffuse *= (1.0 - diffFresnel);
+		}
 
-		sa->diffuse *= (1.0 - diffFresnel);
+		if (inst->affectSpecular) {
+			if (inst->affectMirror || inst->affectTrans) {
+				sa->specular = sa->specular
+				             + (1.0 - sa->specular) * fresnel;
+			} else {
+				double specFresnel = inst->f0 + (1.0 - inst->f0)
+				                   * inst->reflLut[lutIdx];
+				if (specFresnel > 1.0) specFresnel = 1.0;
+				sa->specular = sa->specular
+				             + (1.0 - sa->specular) * specFresnel;
+			}
+		}
 	}
 }
 
@@ -340,7 +363,7 @@ Interface(
 	LWPanelFuncs *panl;
 	LWPanelID     pan;
 	LWControl    *ctlIOR, *ctlReflPow, *ctlMirror, *ctlTrans;
-	LWControl    *ctlDiffuse, *ctlDiffPow;
+	LWControl    *ctlDiffuse, *ctlDiffPow, *ctlSpecular;
 	int           iorFixed;
 	char          infoBuf[64];
 
@@ -371,6 +394,7 @@ Interface(
 		ctlDiffuse = BOOL_CTL(panl, pan, "Affect Diffuse");
 		ctlDiffPow = SLIDER_CTL(panl, pan, "Diffuse Power",
 		                        150, 1, 10);
+		ctlSpecular = BOOL_CTL(panl, pan, "Affect Specular");
 
 		SET_FLOAT(ctlIOR, inst->ior);
 		SET_INT(ctlMirror, inst->affectMirror);
@@ -378,6 +402,7 @@ Interface(
 		SET_INT(ctlTrans, inst->affectTrans);
 		SET_INT(ctlDiffuse, inst->affectDiffuse);
 		SET_INT(ctlDiffPow, inst->diffPower);
+		SET_INT(ctlSpecular, inst->affectSpecular);
 
 		if ((*panl->open)(pan, PANF_BLOCKING | PANF_CANCEL)) {
 			GET_FLOAT(ctlIOR, inst->ior);
@@ -386,6 +411,7 @@ Interface(
 			GET_INT(ctlTrans, inst->affectTrans);
 			GET_INT(ctlDiffuse, inst->affectDiffuse);
 			GET_INT(ctlDiffPow, inst->diffPower);
+			GET_INT(ctlSpecular, inst->affectSpecular);
 
 			if (inst->ior < 1.0) inst->ior = 1.0;
 			if (inst->ior > 5.0) inst->ior = 5.0;
