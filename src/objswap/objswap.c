@@ -17,6 +17,7 @@
 #include <splug.h>
 #include <lwran.h>
 #include <lwpanel.h>
+#include <safe_pluginio.h>
 
 #include <string.h>
 
@@ -241,8 +242,8 @@ parse_frame_number(const char *filename, const char *baseName)
 }
 
 /* ----------------------------------------------------------------
- * Simple bubble sort using byte-level swap (avoids putting
- * a full FrameEntry on the stack — critical for limited plugin stack)
+ * Shell sort using byte-level swap (avoids putting a full FrameEntry
+ * on the stack and is much faster than bubble sort for large lists)
  * ---------------------------------------------------------------- */
 
 static void
@@ -259,11 +260,36 @@ swap_entries(FrameEntry *a, FrameEntry *b)
 static void
 sort_entries(FrameEntry *entries, int n)
 {
-	int i, j;
-	for (i = 0; i < n - 1; i++)
-		for (j = 0; j < n - 1 - i; j++)
-			if (entries[j].frame > entries[j + 1].frame)
-				swap_entries(&entries[j], &entries[j + 1]);
+	int gap, i, j;
+
+	for (gap = n / 2; gap > 0; gap /= 2) {
+		for (i = gap; i < n; i++) {
+			for (j = i; j >= gap; j -= gap) {
+				if (entries[j - gap].frame <= entries[j].frame)
+					break;
+				swap_entries(&entries[j - gap], &entries[j]);
+			}
+		}
+	}
+}
+
+static int
+find_best_entry(FrameEntry *entries, int n, int frame)
+{
+	int lo = 0, hi = n - 1, best = -1;
+
+	while (lo <= hi) {
+		int mid = lo + ((hi - lo) / 2);
+
+		if (entries[mid].frame <= frame) {
+			best = mid;
+			lo = mid + 1;
+		} else {
+			hi = mid - 1;
+		}
+	}
+
+	return best;
 }
 
 /* ----------------------------------------------------------------
@@ -288,7 +314,7 @@ do_scan(ObjSwapInst *inst)
 	struct FileInfoBlock *fib;
 	int                   frame, fileCount;
 	char                 *dest;
-	int                   dirLen;
+	int                   dirLen, nameLen;
 
 	free_entries(inst);
 
@@ -326,13 +352,13 @@ do_scan(ObjSwapInst *inst)
 	}
 
 	dirLen = strlen(inst->baseDir);
+	nameLen = strlen(inst->baseName);
 	fileCount = 0;
 	inst->numEntries = 0;
 	inst->origPath[0] = '\0';
 
 	while (ExNext(lock, fib)) {
 		const char *fname = (const char *)fib->fib_FileName;
-		int nameLen = strlen(inst->baseName);
 
 		if (fib->fib_DirEntryType > 0)
 			continue;
@@ -495,15 +521,8 @@ Load(ObjSwapInst *inst, const LWLoadState *ls)
 
 	XCALL_INIT;
 
-	if (ls->ioMode == LWIO_SCENE) {
-		buf[0] = '\0';
-		(*ls->read)(ls->readData, buf, MAX_PATH);
-		if (buf[0] == '\0')
-			(*ls->read)(ls->readData, buf, MAX_PATH);
-
-		if (buf[0])
-			scan_from_path(inst, buf);
-	}
+	if (spi_read_string_record(ls, buf, sizeof(buf)) > 0 && buf[0])
+		scan_from_path(inst, buf);
 
 	return 0;
 }
@@ -513,10 +532,8 @@ Save(ObjSwapInst *inst, const LWSaveState *ss)
 {
 	XCALL_INIT;
 
-	if (ss->ioMode == LWIO_SCENE && inst->basePath[0])
-		(*ss->write)(ss->writeData,
-		             inst->basePath,
-		             strlen(inst->basePath));
+	if (inst->basePath[0])
+		spi_write_string_record(ss, inst->basePath);
 
 	return 0;
 }
@@ -524,7 +541,7 @@ Save(ObjSwapInst *inst, const LWSaveState *ss)
 XCALL_(static void)
 Evaluate(ObjSwapInst *inst, ObjReplacementAccess *oa)
 {
-	int i, bestIdx;
+	int bestIdx;
 
 	XCALL_INIT;
 
@@ -534,13 +551,8 @@ Evaluate(ObjSwapInst *inst, ObjReplacementAccess *oa)
 	if (inst->numEntries == 0)
 		return;
 
-	bestIdx = -1;
-	for (i = 0; i < inst->numEntries; i++) {
-		if (inst->entries[i].frame <= oa->newFrame)
-			bestIdx = i;
-		else
-			break;
-	}
+	bestIdx = find_best_entry(inst->entries, inst->numEntries,
+	                          oa->newFrame);
 
 	if (bestIdx >= 0)
 		oa->newFilename = inst->entries[bestIdx].filename;

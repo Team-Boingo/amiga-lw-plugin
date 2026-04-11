@@ -2,8 +2,8 @@
  * PBR.C -- PBR-lite Shader Plugin for LightWave 3D
  *
  * Combines Fresnel reflection, roughness (normal perturbation),
- * ambient occlusion (ray-based), and metallic mode into a single
- * physically-based shader for LightWave 5.x on AmigaOS.
+ * metallic mode, blurred reflections, plus fast normal-based AO/env
+ * approximations into a single shader for LightWave 5.x on AmigaOS.
  *
  * Uses AllocMem/FreeMem and custom helpers — no libnix runtime.
  */
@@ -12,6 +12,7 @@
 #include <lwran.h>
 #include <lwpanel.h>
 #include <lwmath.h>
+#include <safe_pluginio.h>
 
 #include <string.h>
 
@@ -74,21 +75,6 @@ int_to_str(int val, char *buf, int buflen)
 }
 
 
-/* ----------------------------------------------------------------
- * Math helpers
- * ---------------------------------------------------------------- */
-
-static double
-pow_int(double base, int exp)
-{
-	double result = 1.0;
-	int i;
-	if (exp < 0) return 0.0;
-	for (i = 0; i < exp; i++)
-		result *= base;
-	return result;
-}
-
 static void
 vec_normalize(double v[3])
 {
@@ -121,13 +107,8 @@ hash3d(double x, double y, double z, unsigned int seed)
  * ---------------------------------------------------------------- */
 
 typedef struct {
-	/* Fresnel */
+	/* Metallic base reflectance */
 	double ior;
-	int    reflPower;
-	int    affectMirror;
-	int    affectTrans;
-	int    affectDiffuse;
-	int    diffPower;
 	double f0;
 
 	/* Roughness */
@@ -136,26 +117,23 @@ typedef struct {
 
 	/* Ambient Occlusion */
 	int    aoEnabled;
-	int    aoSamples;        /* 4, 8, or 16 */
-	int    aoRadius;         /* stored as radius * 100 (centimeters) */
 	int    aoStrength;       /* 0-100 */
 
 	/* Metallic */
 	int    metallic;         /* 0-100 intensity */
-
-	/* Specular */
-	int    affectSpecular;
 
 	/* Blurred Reflections */
 	int    blurReflEnabled;
 	int    blurReflSamples;  /* 4, 8, or 16 */
 	int    blurReflAmount;   /* 0-100 cone spread */
 
-	/* Environment Sampling */
+	/* Environment Light */
 	int    envEnabled;
-	int    envSamples;       /* 4, 8, or 16 */
 	int    envStrength;      /* 0-100 */
 } PBRInst;
+
+#define PBR_SCENE_VERSION  2
+#define PBR_OBJECT_VERSION 2
 
 /* ----------------------------------------------------------------
  * Globals
@@ -179,48 +157,123 @@ compute_f0(PBRInst *inst)
 	inst->f0 = r * r;
 }
 
-/* ----------------------------------------------------------------
- * AO hemisphere sample directions (pre-normalized)
- * 6 axis + 8 diagonals + 2 extras = 16 total
- * ---------------------------------------------------------------- */
+static const char *
+parse_int(const char *s, int *val);
 
-static const double ao_dirs[16][3] = {
-	{ 0.000,  1.000,  0.000},
-	{ 1.000,  0.000,  0.000},
-	{-1.000,  0.000,  0.000},
-	{ 0.000,  0.000,  1.000},
-	{ 0.000,  0.000, -1.000},
-	{ 0.000, -1.000,  0.000},
-	{ 0.577,  0.577,  0.577},
-	{-0.577,  0.577,  0.577},
-	{ 0.577, -0.577,  0.577},
-	{ 0.577,  0.577, -0.577},
-	{-0.577, -0.577,  0.577},
-	{-0.577,  0.577, -0.577},
-	{ 0.577, -0.577, -0.577},
-	{-0.577, -0.577, -0.577},
-	{ 0.707,  0.707,  0.000},
-	{ 0.000,  0.707,  0.707}
-};
+static void
+init_defaults(PBRInst *inst)
+{
+	inst->ior             = 1.5;
+	inst->roughEnabled    = 0;
+	inst->roughAmount     = 20;
+	inst->aoEnabled       = 0;
+	inst->aoStrength      = 50;
+	inst->metallic        = 0;
+	inst->blurReflEnabled = 0;
+	inst->blurReflSamples = 4;
+	inst->blurReflAmount  = 30;
+	inst->envEnabled      = 0;
+	inst->envStrength     = 50;
+	compute_f0(inst);
+}
 
-static const double hemi_dirs[16][3] = {
-	{ 0.000,  1.000,  0.000},
-	{ 0.577,  0.577,  0.577},
-	{-0.577,  0.577,  0.577},
-	{ 0.577,  0.577, -0.577},
-	{-0.577,  0.577, -0.577},
-	{ 0.707,  0.707,  0.000},
-	{-0.707,  0.707,  0.000},
-	{ 0.000,  0.707,  0.707},
-	{ 0.000,  0.707, -0.707},
-	{ 0.383,  0.924,  0.000},
-	{-0.383,  0.924,  0.000},
-	{ 0.000,  0.924,  0.383},
-	{ 0.000,  0.924, -0.383},
-	{ 0.408,  0.816,  0.408},
-	{-0.408,  0.816,  0.408},
-	{ 0.408,  0.816, -0.408}
-};
+static void
+load_v1_from_text(PBRInst *inst, const char *p)
+{
+	int v, skip;
+
+	p = parse_int(p, &v); inst->ior = v / 1000.0;
+	p = parse_int(p, &skip);
+	p = parse_int(p, &skip);
+	p = parse_int(p, &skip);
+	p = parse_int(p, &skip);
+	p = parse_int(p, &skip);
+	p = parse_int(p, &inst->roughEnabled);
+	p = parse_int(p, &inst->roughAmount);
+	p = parse_int(p, &inst->aoEnabled);
+	p = parse_int(p, &skip);
+	p = parse_int(p, &skip);
+	p = parse_int(p, &inst->aoStrength);
+	p = parse_int(p, &inst->metallic);
+	if (inst->metallic == 1) inst->metallic = 100;
+	p = parse_int(p, &skip);
+	p = parse_int(p, &inst->blurReflEnabled);
+	p = parse_int(p, &inst->blurReflSamples);
+	p = parse_int(p, &inst->blurReflAmount);
+	p = parse_int(p, &inst->envEnabled);
+	p = parse_int(p, &skip);
+	p = parse_int(p, &inst->envStrength);
+}
+
+static void
+load_v2_from_text(PBRInst *inst, const char *p)
+{
+	int v;
+
+	p = parse_int(p, &v); inst->ior = v / 1000.0;
+	p = parse_int(p, &inst->roughEnabled);
+	p = parse_int(p, &inst->roughAmount);
+	p = parse_int(p, &inst->aoEnabled);
+	p = parse_int(p, &inst->aoStrength);
+	p = parse_int(p, &inst->metallic);
+	p = parse_int(p, &inst->blurReflEnabled);
+	p = parse_int(p, &inst->blurReflSamples);
+	p = parse_int(p, &inst->blurReflAmount);
+	p = parse_int(p, &inst->envEnabled);
+	p = parse_int(p, &inst->envStrength);
+}
+
+static int
+load_v1_from_object(PBRInst *inst, const LWLoadState *ls)
+{
+	int v, skip;
+
+	if (!spi_read_i32be(ls, &v)) return 0;
+	inst->ior = v / 1000.0;
+	if (!spi_read_i32be(ls, &skip)) return 0;
+	if (!spi_read_i32be(ls, &skip)) return 0;
+	if (!spi_read_i32be(ls, &skip)) return 0;
+	if (!spi_read_i32be(ls, &skip)) return 0;
+	if (!spi_read_i32be(ls, &skip)) return 0;
+	if (!spi_read_i32be(ls, &inst->roughEnabled)) return 0;
+	if (!spi_read_i32be(ls, &inst->roughAmount)) return 0;
+	if (!spi_read_i32be(ls, &inst->aoEnabled)) return 0;
+	if (!spi_read_i32be(ls, &skip)) return 0;
+	if (!spi_read_i32be(ls, &skip)) return 0;
+	if (!spi_read_i32be(ls, &inst->aoStrength)) return 0;
+	if (!spi_read_i32be(ls, &inst->metallic)) return 0;
+	if (inst->metallic == 1) inst->metallic = 100;
+	if (!spi_read_i32be(ls, &skip)) return 0;
+	if (!spi_read_i32be(ls, &inst->blurReflEnabled)) return 0;
+	if (!spi_read_i32be(ls, &inst->blurReflSamples)) return 0;
+	if (!spi_read_i32be(ls, &inst->blurReflAmount)) return 0;
+	if (!spi_read_i32be(ls, &inst->envEnabled)) return 0;
+	if (!spi_read_i32be(ls, &skip)) return 0;
+	if (!spi_read_i32be(ls, &inst->envStrength)) return 0;
+
+	return 1;
+}
+
+static int
+load_v2_from_object(PBRInst *inst, const LWLoadState *ls)
+{
+	int v;
+
+	if (!spi_read_i32be(ls, &v)) return 0;
+	inst->ior = v / 1000.0;
+	if (!spi_read_i32be(ls, &inst->roughEnabled)) return 0;
+	if (!spi_read_i32be(ls, &inst->roughAmount)) return 0;
+	if (!spi_read_i32be(ls, &inst->aoEnabled)) return 0;
+	if (!spi_read_i32be(ls, &inst->aoStrength)) return 0;
+	if (!spi_read_i32be(ls, &inst->metallic)) return 0;
+	if (!spi_read_i32be(ls, &inst->blurReflEnabled)) return 0;
+	if (!spi_read_i32be(ls, &inst->blurReflSamples)) return 0;
+	if (!spi_read_i32be(ls, &inst->blurReflAmount)) return 0;
+	if (!spi_read_i32be(ls, &inst->envEnabled)) return 0;
+	if (!spi_read_i32be(ls, &inst->envStrength)) return 0;
+
+	return 1;
+}
 
 /* ----------------------------------------------------------------
  * Handler callbacks
@@ -235,27 +288,7 @@ Create(LWError *err)
 	inst = (PBRInst *)plugin_alloc(sizeof(PBRInst));
 	if (!inst) return 0;
 
-	inst->ior           = 1.5;
-	inst->reflPower     = 5;
-	inst->affectMirror  = 1;
-	inst->affectTrans   = 1;
-	inst->affectDiffuse = 1;
-	inst->diffPower     = 5;
-	inst->roughEnabled  = 0;
-	inst->roughAmount   = 20;
-	inst->aoEnabled     = 0;
-	inst->aoSamples     = 4;
-	inst->aoRadius      = 100;
-	inst->aoStrength    = 50;
-	inst->metallic      = 0;
-	inst->affectSpecular = 0;
-	inst->blurReflEnabled = 0;
-	inst->blurReflSamples = 4;
-	inst->blurReflAmount  = 30;
-	inst->envEnabled    = 0;
-	inst->envSamples    = 4;
-	inst->envStrength   = 50;
-	compute_f0(inst);
+	init_defaults(inst);
 
 	if (!pow5_ready) {
 		int j;
@@ -319,37 +352,32 @@ Load(PBRInst *inst, const LWLoadState *ls)
 	int v;
 	XCALL_INIT;
 
-	buf[0] = '\0';
-	(*ls->read)(ls->readData, buf, 127);
-	buf[127] = '\0';
-	if (buf[0] == '\0') {
-		(*ls->read)(ls->readData, buf, 127);
-		buf[127] = '\0';
-	}
-	if (!buf[0]) return 0;
+	if (ls->ioMode == LWIO_SCENE) {
+		if (!spi_read_line(ls, buf, sizeof(buf)) || !buf[0])
+			return 0;
 
-	p = buf;
-	p = parse_int(p, &v); inst->ior = v / 1000.0;
-	p = parse_int(p, &v); inst->reflPower = v;
-	p = parse_int(p, &v); inst->affectMirror = v;
-	p = parse_int(p, &v); inst->affectTrans = v;
-	p = parse_int(p, &v); inst->affectDiffuse = v;
-	p = parse_int(p, &v); inst->diffPower = v;
-	p = parse_int(p, &v); inst->roughEnabled = v;
-	p = parse_int(p, &v); inst->roughAmount = v;
-	p = parse_int(p, &v); inst->aoEnabled = v;
-	p = parse_int(p, &v); inst->aoSamples = v;
-	p = parse_int(p, &v); inst->aoRadius = v;
-	p = parse_int(p, &v); inst->aoStrength = v;
-	p = parse_int(p, &v); inst->metallic = v;
-	if (inst->metallic == 1) inst->metallic = 100;
-	p = parse_int(p, &v); inst->affectSpecular = v;
-	p = parse_int(p, &v); inst->blurReflEnabled = v;
-	p = parse_int(p, &v); inst->blurReflSamples = v;
-	p = parse_int(p, &v); inst->blurReflAmount = v;
-	p = parse_int(p, &v); inst->envEnabled = v;
-	p = parse_int(p, &v); inst->envSamples = v;
-	p = parse_int(p, &v); inst->envStrength = v;
+		p = buf;
+		p = parse_int(p, &v);
+		if (v >= 100) {
+			load_v1_from_text(inst, buf);
+		} else if (v == PBR_SCENE_VERSION) {
+			load_v2_from_text(inst, p);
+		} else {
+			return 0;
+		}
+	} else {
+		if (!spi_read_i32be(ls, &v))
+			return 0;
+		if (v == 1) {
+			if (!load_v1_from_object(inst, ls))
+				return 0;
+		} else if (v == PBR_OBJECT_VERSION) {
+			if (!load_v2_from_object(inst, ls))
+				return 0;
+		} else {
+			return 0;
+		}
+	}
 
 	compute_f0(inst);
 	return 0;
@@ -362,28 +390,35 @@ Save(PBRInst *inst, const LWSaveState *ss)
 	int pos = 0;
 	XCALL_INIT;
 
+	append_int(buf, &pos, PBR_SCENE_VERSION);
 	append_int(buf, &pos, (int)(inst->ior * 1000.0));
-	append_int(buf, &pos, inst->reflPower);
-	append_int(buf, &pos, inst->affectMirror);
-	append_int(buf, &pos, inst->affectTrans);
-	append_int(buf, &pos, inst->affectDiffuse);
-	append_int(buf, &pos, inst->diffPower);
 	append_int(buf, &pos, inst->roughEnabled);
 	append_int(buf, &pos, inst->roughAmount);
 	append_int(buf, &pos, inst->aoEnabled);
-	append_int(buf, &pos, inst->aoSamples);
-	append_int(buf, &pos, inst->aoRadius);
 	append_int(buf, &pos, inst->aoStrength);
 	append_int(buf, &pos, inst->metallic);
-	append_int(buf, &pos, inst->affectSpecular);
 	append_int(buf, &pos, inst->blurReflEnabled);
 	append_int(buf, &pos, inst->blurReflSamples);
 	append_int(buf, &pos, inst->blurReflAmount);
 	append_int(buf, &pos, inst->envEnabled);
-	append_int(buf, &pos, inst->envSamples);
 	append_int(buf, &pos, inst->envStrength);
 
-	(*ss->write)(ss->writeData, buf, pos);
+	if (ss->ioMode == LWIO_SCENE) {
+		spi_write_line(ss, buf);
+	} else {
+		spi_write_i32be(ss, PBR_OBJECT_VERSION);
+		spi_write_i32be(ss, (int)(inst->ior * 1000.0));
+		spi_write_i32be(ss, inst->roughEnabled);
+		spi_write_i32be(ss, inst->roughAmount);
+		spi_write_i32be(ss, inst->aoEnabled);
+		spi_write_i32be(ss, inst->aoStrength);
+		spi_write_i32be(ss, inst->metallic);
+		spi_write_i32be(ss, inst->blurReflEnabled);
+		spi_write_i32be(ss, inst->blurReflSamples);
+		spi_write_i32be(ss, inst->blurReflAmount);
+		spi_write_i32be(ss, inst->envEnabled);
+		spi_write_i32be(ss, inst->envStrength);
+	}
 
 	return 0;
 }
@@ -412,19 +447,20 @@ Flags(PBRInst *inst)
 	unsigned int f = 0;
 	XCALL_INIT;
 
-	f |= LWSHF_NORMAL;
+	if (inst->roughEnabled && inst->roughAmount > 0)
+		f |= LWSHF_NORMAL;
 
 	if (inst->metallic > 0)
 		f |= LWSHF_MIRROR | LWSHF_DIFFUSE | LWSHF_SPECULAR;
 
-	if (inst->aoEnabled)
-		f |= LWSHF_DIFFUSE | LWSHF_LUMINOUS | LWSHF_RAYTRACE;
+	if (inst->aoEnabled && inst->aoStrength > 0)
+		f |= LWSHF_DIFFUSE | LWSHF_LUMINOUS;
 
-	if (inst->blurReflEnabled)
+	if (inst->blurReflEnabled && inst->blurReflSamples > 0)
 		f |= LWSHF_COLOR | LWSHF_MIRROR | LWSHF_RAYTRACE;
 
-	if (inst->envEnabled)
-		f |= LWSHF_LUMINOUS | LWSHF_COLOR | LWSHF_RAYTRACE;
+	if (inst->envEnabled && inst->envStrength > 0)
+		f |= LWSHF_LUMINOUS | LWSHF_COLOR;
 
 	return f;
 }
@@ -575,8 +611,9 @@ Evaluate(PBRInst *inst, ShaderAccess *sa)
  * Interface
  * ---------------------------------------------------------------- */
 
-static const char *aoSampleItems[] = { "Off", "2", "4", "8", 0 };
-static int aoSampleValues[] = { 0, 2, 4, 8 };
+static const char *toggleItems[] = { "Off", "On", 0 };
+static const char *blurSampleItems[] = { "Off", "2", "4", "8", 0 };
+static int blurSampleValues[] = { 0, 2, 4, 8 };
 
 XCALL_(static int)
 Interface(
@@ -589,9 +626,9 @@ Interface(
 	LWPanelID     pan;
 	LWControl    *ctlIOR, *ctlMetallic;
 	LWControl    *ctlRoughEn, *ctlRoughAmt;
-	LWControl    *ctlAOSamp, *ctlAORadius, *ctlAOStr;
+	LWControl    *ctlAOEn, *ctlAOStr;
 	LWControl    *ctlBlurSamp, *ctlBlurAmt;
-	LWControl    *ctlEnvSamp, *ctlEnvStr;
+	LWControl    *ctlEnvEn, *ctlEnvStr;
 	int           aoIdx, blurIdx, envIdx;
 	char          infoBuf[80];
 
@@ -615,12 +652,11 @@ Interface(
 		ctlMetallic = SLIDER_CTL(panl, pan, "Metallic", 150, 0, 100);
 		ctlRoughEn  = BOOL_CTL(panl, pan, "Roughness");
 		ctlRoughAmt = INT_CTL(panl, pan, "");
-		ctlAOSamp   = POPUP_CTL(panl, pan, "AO", aoSampleItems);
-		ctlAORadius = FLOAT_CTL(panl, pan, "Radius");
+		ctlAOEn     = POPUP_CTL(panl, pan, "AO", toggleItems);
 		ctlAOStr    = SLIDER_CTL(panl, pan, "AO Strength", 150, 0, 100);
-		ctlBlurSamp = POPUP_CTL(panl, pan, "Blur Refl", aoSampleItems);
+		ctlBlurSamp = POPUP_CTL(panl, pan, "Blur Refl", blurSampleItems);
 		ctlBlurAmt  = INT_CTL(panl, pan, "Spread");
-		ctlEnvSamp  = POPUP_CTL(panl, pan, "Env Light", aoSampleItems);
+		ctlEnvEn    = POPUP_CTL(panl, pan, "Env Light", toggleItems);
 		ctlEnvStr   = INT_CTL(panl, pan, "Strength");
 
 		{
@@ -633,11 +669,8 @@ Interface(
 			MOVE_CON(ctlRoughAmt, halfX, cy);
 			shift += rowH;
 
-			cy = CON_Y(ctlAOSamp); cx = CON_X(ctlAOSamp);
-			MOVE_CON(ctlAOSamp, cx, cy - shift);
-			cy = CON_Y(ctlAOSamp);
-			MOVE_CON(ctlAORadius, halfX, cy);
-			shift += rowH;
+			cy = CON_Y(ctlAOEn); cx = CON_X(ctlAOEn);
+			MOVE_CON(ctlAOEn, cx, cy - shift);
 
 			cy = CON_Y(ctlAOStr); cx = CON_X(ctlAOStr);
 			MOVE_CON(ctlAOStr, cx, cy - shift);
@@ -646,11 +679,10 @@ Interface(
 			MOVE_CON(ctlBlurSamp, cx, cy - shift);
 			cy = CON_Y(ctlBlurSamp);
 			MOVE_CON(ctlBlurAmt, halfX, cy);
-			shift += rowH;
 
-			cy = CON_Y(ctlEnvSamp); cx = CON_X(ctlEnvSamp);
-			MOVE_CON(ctlEnvSamp, cx, cy - shift);
-			cy = CON_Y(ctlEnvSamp);
+			cy = CON_Y(ctlEnvEn); cx = CON_X(ctlEnvEn);
+			MOVE_CON(ctlEnvEn, cx, cy - shift);
+			cy = CON_Y(ctlEnvEn);
 			MOVE_CON(ctlEnvStr, halfX, cy);
 
 			cy = CON_Y(ctlEnvStr);
@@ -662,24 +694,16 @@ Interface(
 		SET_INT(ctlMetallic, inst->metallic);
 		SET_INT(ctlRoughEn, inst->roughEnabled);
 		SET_INT(ctlRoughAmt, inst->roughAmount);
-		aoIdx = inst->aoEnabled
-		      ? ((inst->aoSamples <= 2) ? 1 : (inst->aoSamples <= 4) ? 2 : 3)
-		      : 0;
-		SET_INT(ctlAOSamp, aoIdx);
-		{
-			double r = inst->aoRadius / 100.0;
-			SET_FLOAT(ctlAORadius, r);
-		}
+		aoIdx = inst->aoEnabled ? 1 : 0;
+		SET_INT(ctlAOEn, aoIdx);
 		SET_INT(ctlAOStr, inst->aoStrength);
 		blurIdx = inst->blurReflEnabled
 		        ? ((inst->blurReflSamples <= 2) ? 1 : (inst->blurReflSamples <= 4) ? 2 : 3)
 		        : 0;
 		SET_INT(ctlBlurSamp, blurIdx);
 		SET_INT(ctlBlurAmt, inst->blurReflAmount);
-		envIdx = inst->envEnabled
-		       ? ((inst->envSamples <= 2) ? 1 : (inst->envSamples <= 4) ? 2 : 3)
-		       : 0;
-		SET_INT(ctlEnvSamp, envIdx);
+		envIdx = inst->envEnabled ? 1 : 0;
+		SET_INT(ctlEnvEn, envIdx);
 		SET_INT(ctlEnvStr, inst->envStrength);
 
 		if ((*panl->open)(pan, PANF_BLOCKING | PANF_CANCEL)) {
@@ -687,34 +711,22 @@ Interface(
 			GET_INT(ctlMetallic, inst->metallic);
 			GET_INT(ctlRoughEn, inst->roughEnabled);
 			GET_INT(ctlRoughAmt, inst->roughAmount);
-			GET_INT(ctlAOSamp, aoIdx);
+			GET_INT(ctlAOEn, aoIdx);
 			inst->aoEnabled = (aoIdx > 0) ? 1 : 0;
-			inst->aoSamples = (aoIdx > 0 && aoIdx < 4) ? aoSampleValues[aoIdx] : 8;
-			{
-				double r;
-				GET_FLOAT(ctlAORadius, r);
-				inst->aoRadius = (int)(r * 100.0);
-			}
 			GET_INT(ctlAOStr, inst->aoStrength);
 			GET_INT(ctlBlurSamp, blurIdx);
 			inst->blurReflEnabled = (blurIdx > 0) ? 1 : 0;
-			inst->blurReflSamples = (blurIdx > 0 && blurIdx < 4) ? aoSampleValues[blurIdx] : 8;
+			inst->blurReflSamples = (blurIdx > 0 && blurIdx < 4) ? blurSampleValues[blurIdx] : 8;
 			GET_INT(ctlBlurAmt, inst->blurReflAmount);
-			GET_INT(ctlEnvSamp, envIdx);
+			GET_INT(ctlEnvEn, envIdx);
 			inst->envEnabled = (envIdx > 0) ? 1 : 0;
-			inst->envSamples = (envIdx > 0 && envIdx < 4) ? aoSampleValues[envIdx] : 8;
 			GET_INT(ctlEnvStr, inst->envStrength);
 
 			/* Clamp */
 			if (inst->ior < 1.0) inst->ior = 1.0;
 			if (inst->ior > 5.0) inst->ior = 5.0;
-			if (inst->reflPower < 1) inst->reflPower = 1;
-			if (inst->reflPower > 10) inst->reflPower = 10;
-			if (inst->diffPower < 1) inst->diffPower = 1;
-			if (inst->diffPower > 10) inst->diffPower = 10;
 			if (inst->roughAmount < 0) inst->roughAmount = 0;
 			if (inst->roughAmount > 100) inst->roughAmount = 100;
-			if (inst->aoRadius < 1) inst->aoRadius = 1;
 			if (inst->aoStrength < 0) inst->aoStrength = 0;
 			if (inst->aoStrength > 100) inst->aoStrength = 100;
 			if (inst->blurReflAmount < 0) inst->blurReflAmount = 0;

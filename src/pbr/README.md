@@ -1,8 +1,9 @@
 # PBR Shader — Physically-Based Rendering for LightWave 3D
 
 A combined PBR-lite shader that brings modern material concepts to LightWave 5.x
-on AmigaOS. Includes variable metallic intensity, roughness, ambient occlusion,
-blurred reflections, and environment sampling in a single plugin. For
+on AmigaOS. Includes variable metallic intensity, roughness, a normal-based
+ambient occlusion approximation, multi-sample blurred reflections, and a
+normal-based environment light approximation in a single plugin. For
 angle-dependent Fresnel effects, stack with the standalone Fresnel plugin.
 
 ## Features
@@ -13,10 +14,9 @@ hash function. This breaks up perfect mirror reflections and sharp specular
 highlights, simulating micro-surface detail without requiring bump maps.
 
 ### Ambient Occlusion
-Casts rays from each surface point into the surrounding hemisphere to detect
-nearby geometry. Areas where rays hit nearby surfaces (corners, crevices) are
-darkened, adding depth and contact shadows. Configurable sample count (4/8/16),
-radius, and strength.
+Uses a fast normal-based approximation to darken downward-facing and
+glancing-angle surfaces. It does not ray trace nearby geometry, but it still
+adds useful contact-shadow shaping and depth at very low cost.
 
 ### Metallic
 Variable intensity (0-100) blending between dielectric and metallic behavior.
@@ -31,12 +31,10 @@ controlled by the Blur Spread setting (independent of roughness). The averaged
 result is blended into the surface color, producing soft, spread-out
 reflections for frosted, rough, or brushed materials.
 
-### Environment Sampling
-Approximates indirect lighting by casting 4/8/16 rays into the hemisphere
-around the surface normal. Each sample is cosine-weighted for physically
-correct importance sampling. The gathered light is added to the surface
-color and slightly boosts luminosity, giving objects a sense of being lit
-by their surroundings rather than just direct lights.
+### Environment Light
+Uses a fast sky-facing normal approximation to add indirect fill light and a
+small luminosity boost. This is not ray-traced global illumination, but it
+helps keep surfaces from looking too flat.
 
 ## Installation
 
@@ -66,12 +64,11 @@ Plugin ShaderInterface PBR pbr.p PBR Shader
 | Metallic | 0 – 100 | 0 | Metallic intensity (0=dielectric, 100=full metal) |
 | Roughness | on/off | off | Perturb normals for rough surfaces |
 | Roughness Amount | 0 – 100 | 20 | Intensity of normal perturbation |
-| AO | Off/2/4/8 | Off | Ambient occlusion ray samples |
-| AO Radius | float | 1.0m | Maximum occlusion distance |
+| AO | Off/On | Off | Enable the normal-based ambient occlusion approximation |
 | AO Strength | 0 – 100 | 50 | Occlusion darkening intensity |
 | Blur Refl | Off/2/4/8 | Off | Blurred reflection ray samples |
 | Blur Spread | 0 – 100 | 30 | Cone spread angle |
-| Env Light | Off/2/4/8 | Off | Environment sampling ray samples |
+| Env Light | Off/On | Off | Enable the sky-facing environment light approximation |
 | Env Strength | 0 – 100 | 50 | Indirect lighting intensity |
 
 For angle-dependent Fresnel effects (reflection, transparency, diffuse, specular),
@@ -91,16 +88,21 @@ stack the **Fresnel** plugin on the same surface.
 ### Performance Notes
 
 - **Fresnel, Roughness, Metallic**: Very fast — no extra rays, pure math
-- **Ambient Occlusion**: Slower — casts 4-16 rays per surface point. Use
-  4 samples for previews, 8-16 for final renders
+- **Ambient Occlusion**: Very fast — normal-based approximation, no extra rays
 - **Blurred Reflections**: Similar cost to AO — casts 4-16 rays per reflective
   surface point. Only active on surfaces with mirror > 0
-- **Environment Sampling**: Casts 4-16 rays per surface point for indirect
-  lighting. Combine with AO sparingly — both cast rays and costs stack
-- On JIT-equipped emulators ray-based features are quite manageable; on
-  real 68k hardware, limit ray-casting features to 4 samples each
+- **Environment Sampling**: Very fast — normal-based approximation, no extra rays
+- Only **Blurred Reflections** uses extra ray tracing in the current shader
+- On JIT-equipped emulators blurred reflections are quite manageable; on
+  real 68k hardware, keep blur samples low for final renders
 - All features can be independently enabled/disabled
 
 ## Scene Persistence
 
 All settings are saved with the scene file and restored on reload.
+Older scenes with legacy AO radius/sample and environment sample values still
+load, but the current shader only uses the on/off and strength controls for
+those two approximations.
+
+As of `0.7.0`, the shader no longer exposes the old unused AO radius/sample and
+environment sample controls in the UI.

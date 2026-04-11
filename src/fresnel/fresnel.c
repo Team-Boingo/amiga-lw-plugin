@@ -16,6 +16,7 @@
 #include <splug.h>
 #include <lwran.h>
 #include <lwpanel.h>
+#include <safe_pluginio.h>
 
 #include <string.h>
 
@@ -99,6 +100,7 @@ pow_int(double base, int exp)
 
 #define FRESNEL_DEFAULT_IOR    1.5
 #define FRESNEL_DEFAULT_POWER  5
+#define FRESNEL_OBJECT_VERSION 1
 
 typedef struct {
 	double ior;            /* index of refraction (1.0 - 5.0)    */
@@ -218,23 +220,31 @@ Load(FresnelInst *inst, const LWLoadState *ls)
 
 	XCALL_INIT;
 
-	buf[0] = '\0';
-	(*ls->read)(ls->readData, buf, 63);
-	buf[63] = '\0';
-	if (buf[0] == '\0') {
-		(*ls->read)(ls->readData, buf, 63);
-		buf[63] = '\0';
-	}
-	if (!buf[0]) return 0;
+	if (ls->ioMode == LWIO_SCENE) {
+		if (!spi_read_line(ls, buf, sizeof(buf)) || !buf[0])
+			return 0;
 
-	p = buf;
-	p = parse_int(p, &v); inst->ior = v / 1000.0;
-	p = parse_int(p, &v); inst->reflPower = v;
-	p = parse_int(p, &v); inst->affectMirror = v;
-	p = parse_int(p, &v); inst->affectTrans = v;
-	p = parse_int(p, &v); inst->affectDiffuse = v;
-	p = parse_int(p, &v); inst->diffPower = v;
-	p = parse_int(p, &v); inst->affectSpecular = v;
+		p = buf;
+		p = parse_int(p, &v); inst->ior = v / 1000.0;
+		p = parse_int(p, &v); inst->reflPower = v;
+		p = parse_int(p, &v); inst->affectMirror = v;
+		p = parse_int(p, &v); inst->affectTrans = v;
+		p = parse_int(p, &v); inst->affectDiffuse = v;
+		p = parse_int(p, &v); inst->diffPower = v;
+		p = parse_int(p, &v); inst->affectSpecular = v;
+	} else {
+		if (!spi_read_i32be(ls, &v) || v != FRESNEL_OBJECT_VERSION)
+			return 0;
+		if (!spi_read_i32be(ls, &v))
+			return 0;
+		inst->ior = v / 1000.0;
+		if (!spi_read_i32be(ls, &inst->reflPower)) return 0;
+		if (!spi_read_i32be(ls, &inst->affectMirror)) return 0;
+		if (!spi_read_i32be(ls, &inst->affectTrans)) return 0;
+		if (!spi_read_i32be(ls, &inst->affectDiffuse)) return 0;
+		if (!spi_read_i32be(ls, &inst->diffPower)) return 0;
+		if (!spi_read_i32be(ls, &inst->affectSpecular)) return 0;
+	}
 
 	compute_f0(inst);
 	return 0;
@@ -256,7 +266,18 @@ Save(FresnelInst *inst, const LWSaveState *ss)
 	append_int(buf, &pos, inst->diffPower);
 	append_int(buf, &pos, inst->affectSpecular);
 
-	(*ss->write)(ss->writeData, buf, pos);
+	if (ss->ioMode == LWIO_SCENE) {
+		spi_write_line(ss, buf);
+	} else {
+		spi_write_i32be(ss, FRESNEL_OBJECT_VERSION);
+		spi_write_i32be(ss, (int)(inst->ior * 1000.0));
+		spi_write_i32be(ss, inst->reflPower);
+		spi_write_i32be(ss, inst->affectMirror);
+		spi_write_i32be(ss, inst->affectTrans);
+		spi_write_i32be(ss, inst->affectDiffuse);
+		spi_write_i32be(ss, inst->diffPower);
+		spi_write_i32be(ss, inst->affectSpecular);
+	}
 
 	return 0;
 }

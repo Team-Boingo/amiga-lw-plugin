@@ -2,6 +2,19 @@
 
 LightWave 3D 5.x plugins for AmigaOS, cross-compiled with GCC.
 
+Current version: `0.7.0`
+
+## 0.7.0 Highlights
+
+- Fixed scene persistence for the **Fresnel** and **PBR** shaders so object
+  property saves now stick correctly when the plugins are attached.
+- Simplified **PBR Shader** to match its current implementation: AO and
+  environment light are now documented and exposed as fast normal-based
+  approximations, while blurred reflections remain the ray-traced feature.
+- Expanded **LensFlare** to support a configurable flare-source cap up to 50.
+- Optimized **ObjSwap** for larger replacement sets with faster sorting and
+  frame lookup.
+
 ## Plugins
 
 ### ObjSwap
@@ -26,17 +39,17 @@ control over reflection, diffuse and transparency effects.
 
 Combined PBR-lite shader that brings modern material concepts to LightWave 5.x.
 Includes variable metallic intensity (0-100), roughness (normal perturbation),
-ambient occlusion (ray-based hemisphere sampling), blurred reflections (cone-traced
-multi-sample rays), and environment sampling (indirect lighting via hemisphere
-ray casting with cosine weighting). For angle-dependent Fresnel effects, stack
-with the standalone Fresnel plugin.
+ambient occlusion and environment-light approximations based on the surface
+normal, plus blurred reflections using multi-sample ray tracing. For
+angle-dependent Fresnel effects, stack with the standalone Fresnel plugin.
 
 ### LensFlare
 
 Post-render image filter that detects bright specular highlights and composites
-glow and hexagonal star streaks over the rendered image. Finds the 8 brightest
-specular hotspots and renders warm-tinted flares with configurable threshold,
-radius, streak length, and intensity. Applied via the Effects/Image Processing panel.
+glow and hexagonal star streaks over the rendered image. Finds the brightest
+specular hotspots up to a configurable cap (default 8, maximum 50) and renders
+warm-tinted flares with configurable threshold, radius, streak length, and
+intensity. Applied via the Effects/Image Processing panel.
 
 ## Toolchain
 

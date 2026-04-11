@@ -11,6 +11,7 @@
 #include <splug.h>
 #include <lwran.h>
 #include <lwpanel.h>
+#include <safe_pluginio.h>
 
 #include <string.h>
 
@@ -122,6 +123,7 @@ static const double rot_sin[8] = {
 
 #define MAX_DETECT 64
 #define MAX_FLARES 50
+#define LENSFLARE_OBJECT_VERSION 1
 
 typedef struct {
 	int x, y;
@@ -198,25 +200,33 @@ Load(LensFlareInst *inst, const LWLoadState *ls)
 	int v;
 	XCALL_INIT;
 
-	buf[0] = '\0';
-	(*ls->read)(ls->readData, buf, 63);
-	buf[63] = '\0';
-	if (buf[0] == '\0') {
-		(*ls->read)(ls->readData, buf, 63);
-		buf[63] = '\0';
-	}
-	if (!buf[0]) return 0;
+	if (ls->ioMode == LWIO_SCENE) {
+		if (!spi_read_line(ls, buf, sizeof(buf)) || !buf[0])
+			return 0;
 
-	p = buf;
-	p = lf_parse_int(p, &v); inst->threshold = v;
-	p = lf_parse_int(p, &v); inst->glowRadius = v;
-	p = lf_parse_int(p, &v); inst->streakLength = v;
-	p = lf_parse_int(p, &v); inst->intensity = v;
-	p = lf_parse_int(p, &v); inst->streakCount = v;
-	p = lf_parse_int(p, &v); inst->randomRotation = v;
-	p = lf_parse_int(p, &v); inst->showRing = v;
-	p = lf_parse_int(p, &v); inst->anamorphic = v;
-	p = lf_parse_int(p, &v); inst->maxFlares = v;
+		p = buf;
+		p = lf_parse_int(p, &v); inst->threshold = v;
+		p = lf_parse_int(p, &v); inst->glowRadius = v;
+		p = lf_parse_int(p, &v); inst->streakLength = v;
+		p = lf_parse_int(p, &v); inst->intensity = v;
+		p = lf_parse_int(p, &v); inst->streakCount = v;
+		p = lf_parse_int(p, &v); inst->randomRotation = v;
+		p = lf_parse_int(p, &v); inst->showRing = v;
+		p = lf_parse_int(p, &v); inst->anamorphic = v;
+		p = lf_parse_int(p, &v); inst->maxFlares = v;
+	} else {
+		if (!spi_read_i32be(ls, &v) || v != LENSFLARE_OBJECT_VERSION)
+			return 0;
+		if (!spi_read_i32be(ls, &inst->threshold)) return 0;
+		if (!spi_read_i32be(ls, &inst->glowRadius)) return 0;
+		if (!spi_read_i32be(ls, &inst->streakLength)) return 0;
+		if (!spi_read_i32be(ls, &inst->intensity)) return 0;
+		if (!spi_read_i32be(ls, &inst->streakCount)) return 0;
+		if (!spi_read_i32be(ls, &inst->randomRotation)) return 0;
+		if (!spi_read_i32be(ls, &inst->showRing)) return 0;
+		if (!spi_read_i32be(ls, &inst->anamorphic)) return 0;
+		if (!spi_read_i32be(ls, &inst->maxFlares)) return 0;
+	}
 	if (inst->maxFlares < 1) inst->maxFlares = 1;
 	if (inst->maxFlares > 50) inst->maxFlares = 50;
 
@@ -243,7 +253,20 @@ Save(LensFlareInst *inst, const LWSaveState *ss)
 	lf_append_int(buf, &pos, inst->anamorphic);
 	lf_append_int(buf, &pos, inst->maxFlares);
 
-	(*ss->write)(ss->writeData, buf, pos);
+	if (ss->ioMode == LWIO_SCENE) {
+		spi_write_line(ss, buf);
+	} else {
+		spi_write_i32be(ss, LENSFLARE_OBJECT_VERSION);
+		spi_write_i32be(ss, inst->threshold);
+		spi_write_i32be(ss, inst->glowRadius);
+		spi_write_i32be(ss, inst->streakLength);
+		spi_write_i32be(ss, inst->intensity);
+		spi_write_i32be(ss, inst->streakCount);
+		spi_write_i32be(ss, inst->randomRotation);
+		spi_write_i32be(ss, inst->showRing);
+		spi_write_i32be(ss, inst->anamorphic);
+		spi_write_i32be(ss, inst->maxFlares);
+	}
 
 	return 0;
 }
@@ -251,14 +274,22 @@ Save(LensFlareInst *inst, const LWSaveState *ss)
 XCALL_(static void)
 Process(LensFlareInst *inst, const FilterAccess *fa)
 {
-	FlareSource detect[MAX_DETECT];
-	FlareSource flares[MAX_FLARES];
+	FlareSource *detect;
+	FlareSource *flares;
 	int numDetect = 0, numFlares = 0;
 	int x, y, i, s;
 	double inten;
 	int thresh, gradR, strkLen, nStrk;
 
 	XCALL_INIT;
+
+	detect = (FlareSource *)plugin_alloc(sizeof(FlareSource) * MAX_DETECT);
+	flares = (FlareSource *)plugin_alloc(sizeof(FlareSource) * MAX_FLARES);
+	if (!detect || !flares) {
+		if (detect) plugin_free(detect);
+		if (flares) plugin_free(flares);
+		return;
+	}
 
 	thresh  = inst->threshold;
 	gradR   = inst->glowRadius;
@@ -475,6 +506,9 @@ Process(LensFlareInst *inst, const FilterAccess *fa)
 			(*fa->setRGB)(x, y, rgb);
 		}
 	}
+
+	plugin_free(flares);
+	plugin_free(detect);
 }
 
 XCALL_(static unsigned int)

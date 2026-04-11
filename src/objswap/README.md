@@ -95,3 +95,6 @@ Plugin ObjReplacementInterface ObjSwap objswap.p ObjSwap
 
 - **Maximum files**: The plugin supports up to 4096 replacement files per
   object.
+
+- **Large sequences**: As of `0.7.0`, scan results are sorted and searched
+  more efficiently, so bigger replacement sets remain responsive.
